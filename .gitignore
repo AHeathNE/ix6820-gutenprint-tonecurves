@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.bak
+scan_*.png
+sheet*.png

@@ -1,0 +1,149 @@
+#!/usr/bin/python3
+# CUPS filter: apply a per-media tone curve to 8-bit RGB/gray CUPS raster,
+# then hand the result to the stock Gutenprint raster filter.
+#
+#   job-id user title copies options [file]
+#
+# Curves live in /usr/share/cups/tone-curves/<MediaType>.json
+# ({"r":[256],"g":[256],"b":[256]}). No curve for a media type -> pass-through.
+import ctypes, glob, json, os, subprocess, sys
+import numpy as np
+
+CURVE_DIR = os.environ.get("TONE_CURVE_DIR", "/usr/share/cups/tone-curves")
+def _find_child():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (here, "/usr/lib/cups/filter", "/usr/libexec/cups/filter"):
+        found = sorted(glob.glob(os.path.join(d, "rastertogutenprint.*")))
+        if found:
+            return found[-1]
+    return "/usr/lib/cups/filter/rastertogutenprint.5.3"
+
+
+CHILD = os.environ.get("TONE_CHILD") or _find_child()
+RGB_SPACES = {1, 18, 19, 20}   # RGB, SW?, sRGB, AdobeRGB (3 channel)
+GRAY_SPACES = {0}              # W
+
+
+class Hdr(ctypes.Structure):  # cups_page_header2_t, 1796 bytes
+    _fields_ = [
+        ("MediaClass", ctypes.c_char * 64), ("MediaColor", ctypes.c_char * 64),
+        ("MediaType", ctypes.c_char * 64), ("OutputType", ctypes.c_char * 64),
+        ("AdvanceDistance", ctypes.c_uint), ("AdvanceMedia", ctypes.c_uint),
+        ("Collate", ctypes.c_uint), ("CutMedia", ctypes.c_uint),
+        ("Duplex", ctypes.c_uint), ("HWResolution", ctypes.c_uint * 2),
+        ("ImagingBoundingBox", ctypes.c_uint * 4), ("InsertSheet", ctypes.c_uint),
+        ("Jog", ctypes.c_uint), ("LeadingEdge", ctypes.c_uint),
+        ("Margins", ctypes.c_uint * 2), ("ManualFeed", ctypes.c_uint),
+        ("MediaPosition", ctypes.c_uint), ("MediaWeight", ctypes.c_uint),
+        ("MirrorPrint", ctypes.c_uint), ("NegativePrint", ctypes.c_uint),
+        ("NumCopies", ctypes.c_uint), ("Orientation", ctypes.c_uint),
+        ("OutputFaceUp", ctypes.c_uint), ("PageSize", ctypes.c_uint * 2),
+        ("Separations", ctypes.c_uint), ("TraySwitch", ctypes.c_uint),
+        ("Tumble", ctypes.c_uint), ("cupsWidth", ctypes.c_uint),
+        ("cupsHeight", ctypes.c_uint), ("cupsMediaType", ctypes.c_uint),
+        ("cupsBitsPerColor", ctypes.c_uint), ("cupsBitsPerPixel", ctypes.c_uint),
+        ("cupsBytesPerLine", ctypes.c_uint), ("cupsColorOrder", ctypes.c_uint),
+        ("cupsColorSpace", ctypes.c_uint), ("cupsCompression", ctypes.c_uint),
+        ("cupsRowCount", ctypes.c_uint), ("cupsRowFeed", ctypes.c_uint),
+        ("cupsRowStep", ctypes.c_uint), ("cupsNumColors", ctypes.c_uint),
+        ("cupsBorderlessScalingFactor", ctypes.c_float),
+        ("cupsPageSize", ctypes.c_float * 2), ("cupsImagingBBox", ctypes.c_float * 4),
+        ("cupsInteger", ctypes.c_uint * 16), ("cupsReal", ctypes.c_float * 16),
+        ("cupsString", (ctypes.c_char * 64) * 16), ("cupsMarkerType", ctypes.c_char * 64),
+        ("cupsRenderingIntent", ctypes.c_char * 64), ("cupsPageSizeName", ctypes.c_char * 64),
+    ]
+
+
+assert ctypes.sizeof(Hdr) == 1796
+
+
+def log(msg):
+    sys.stderr.write("DEBUG: rastertogutenprint-curve: %s\n" % msg)
+    sys.stderr.flush()
+
+
+def media_type(options):
+    for opt in options.split():
+        if opt.lower().startswith("mediatype="):
+            return opt.split("=", 1)[1]
+    return "Plain"
+
+
+def load_curve(name):
+    if not name.replace("_", "").replace("-", "").isalnum():
+        return None
+    try:
+        with open(os.path.join(CURVE_DIR, name + ".json")) as f:
+            d = json.load(f)
+        return [np.array(d[c], dtype=np.uint8) for c in "rgb"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def main():
+    if len(sys.argv) < 6:
+        sys.stderr.write("ERROR: usage: %s job user title copies options [file]\n" % sys.argv[0])
+        return 1
+    options = sys.argv[5]
+    # per-queue curve first (CUPS sets PRINTER), then per-MediaType
+    queue = os.environ.get("PRINTER", "")
+    curve, used = None, None
+    for name in (queue, media_type(options)):
+        if name and (curve := load_curve(name)) is not None:
+            used = name
+            break
+    log("queue=%s MediaType=%s curve=%s" % (queue, media_type(options), used or "none (pass-through)"))
+
+    cups = ctypes.CDLL("libcups.so.2")
+    cups.cupsRasterOpen.restype = ctypes.c_void_p
+    cups.cupsRasterOpen.argtypes = [ctypes.c_int, ctypes.c_int]
+    for fn in ("cupsRasterReadHeader2", "cupsRasterWriteHeader2"):
+        getattr(cups, fn).argtypes = [ctypes.c_void_p, ctypes.POINTER(Hdr)]
+    cups.cupsRasterReadPixels.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint]
+    cups.cupsRasterWritePixels.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint]
+    cups.cupsRasterClose.argtypes = [ctypes.c_void_p]
+
+    src = open(sys.argv[6], "rb") if len(sys.argv) > 6 else None
+    in_fd = src.fileno() if src else 0
+    child = subprocess.Popen([CHILD] + sys.argv[1:6], stdin=subprocess.PIPE)
+    rin = cups.cupsRasterOpen(in_fd, 0)
+    rout = cups.cupsRasterOpen(child.stdin.fileno(), 1)
+
+    hdr = Hdr()
+    page = 0
+    while cups.cupsRasterReadHeader2(rin, ctypes.byref(hdr)):
+        page += 1
+        n = hdr.cupsNumColors
+        apply = (curve is not None and hdr.cupsBitsPerColor == 8 and hdr.cupsBitsPerPixel == 8 * n
+                 and ((hdr.cupsColorSpace in RGB_SPACES and n == 3)
+                      or (hdr.cupsColorSpace in GRAY_SPACES and n == 1))
+                 and hdr.cupsColorOrder == 0)
+        log("page %d: %dx%d cs=%d bpc=%d colors=%d -> %s" % (
+            page, hdr.cupsWidth, hdr.cupsHeight, hdr.cupsColorSpace,
+            hdr.cupsBitsPerColor, n, "curve" if apply else "pass-through"))
+        cups.cupsRasterWriteHeader2(rout, ctypes.byref(hdr))
+        bpl = hdr.cupsBytesPerLine
+        buf = ctypes.create_string_buffer(bpl)
+        for _ in range(hdr.cupsHeight):
+            if cups.cupsRasterReadPixels(rin, buf, bpl) < 1:
+                break
+            if apply:
+                row = np.frombuffer(buf.raw, dtype=np.uint8).copy()
+                if n == 3:
+                    px = row[: hdr.cupsWidth * 3].reshape(-1, 3)
+                    for c in range(3):
+                        px[:, c] = curve[c][px[:, c]]
+                else:
+                    row[: hdr.cupsWidth] = curve[1][row[: hdr.cupsWidth]]
+                out = row.tobytes()
+            else:
+                out = buf.raw
+            cups.cupsRasterWritePixels(rout, out, bpl)
+    cups.cupsRasterClose(rin)
+    cups.cupsRasterClose(rout)
+    child.stdin.close()
+    return child.wait()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
