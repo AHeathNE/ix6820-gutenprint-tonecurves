@@ -10,9 +10,9 @@ it dry, scan at 300 dpi colour (Letter, no enhancement, face down), then `measur
 `fit` composes the new curve with --current (the curve that was active when the sheet was printed;
 omit it if the queue had no curve) so you can iterate: print, scan, fit, install, repeat.
 
-Chart geometry is fixed. A CUPS fit-to-page print on Letter lands on the scan at scale 0.969 with
-an offset of about (27.6, 37) px at 300 dpi; if your scan differs, pass --scale/--ox/--oy and check
-with `measure --overlay check.png`.
+Chart geometry is fixed. Where it lands on your scan is found automatically from the black block
+(it varies by printer margins and scaling). Override with --scale/--ox/--oy and check the sampling
+boxes with `measure --overlay check.png`.
 """
 import argparse, json, math, sys
 import numpy as np
@@ -82,9 +82,30 @@ def make_chart(out, label, photo=None):
     im.save(out, dpi=(300, 300))
 
 
+def auto_register(im):
+    """Find where the chart landed on the scan by locating the black block.
+    Returns (scale, ox, oy) for the mapping scan_px = scale * chart_px + offset."""
+    g = im.mean(axis=2)
+    dark = (g < 60)[2000:3100, 0:1500]
+    rows = np.where(dark.mean(axis=1) > 0.5)[0]
+    cols = np.where(dark.mean(axis=0) > 0.5)[0]
+    if len(rows) < 100 or len(cols) < 100:
+        return None
+    y0, y1, x0, x1 = rows.min() + 2000, rows.max() + 2000, cols.min(), cols.max()
+    kx, ky = (x1 - x0) / (BLOCK[2] - BLOCK[0]), (y1 - y0) / (BLOCK[3] - BLOCK[1])
+    k = (kx + ky) / 2
+    return k, x0 - k * BLOCK[0], y0 - k * BLOCK[1]
+
+
 class Scan:
-    def __init__(self, path, scale, ox, oy):
+    def __init__(self, path, scale=None, ox=None, oy=None):
         self.im = np.asarray(Image.open(path).convert("RGB")).astype(float)
+        if scale is None:
+            reg = auto_register(self.im)
+            if reg is None:
+                print("warning: could not locate the black block; using defaults 0.969/27.6/37", file=sys.stderr)
+                reg = (0.969, 27.6, 37.0)
+            scale, ox, oy = reg
         self.k, self.ox, self.oy = scale, ox, oy
 
     def cell(self, x0, y0, w, h, pad=8):
@@ -112,6 +133,7 @@ def cmd_measure(a):
     s = Scan(a.scan, a.scale, a.ox, a.oy)
     t, r = s.ramp()
     paper = s.paper()
+    print("registration: scale %.3f offset %.1f,%.1f" % (s.k, s.ox, s.oy))
     print("paper colour (unprinted area): R%.0f G%.0f B%.0f" % tuple(paper))
     print("input   R    G    B   R-B   %of paper (G)")
     for ti, ri in zip(t[::-1], r[::-1]):
@@ -122,8 +144,8 @@ def cmd_measure(a):
         for g, n in ((RAMP, RAMP_N), (STRIP, STRIP_N)):
             for i in range(n):
                 x0 = g["x0"] + i * g["step"]
-                d.rectangle([a.scale * x0 + a.ox, a.scale * g["y0"] + a.oy,
-                             a.scale * (x0 + g["w"]) + a.ox, a.scale * (g["y0"] + g["h"]) + a.oy], outline=(255, 0, 0), width=4)
+                d.rectangle([s.k * x0 + s.ox, s.k * g["y0"] + s.oy,
+                             s.k * (x0 + g["w"]) + s.ox, s.k * (g["y0"] + g["h"]) + s.oy], outline=(255, 0, 0), width=4)
         im.save(a.overlay); print("wrote", a.overlay)
 
 
@@ -166,8 +188,8 @@ def main():
     c.add_argument("--photo", help="optional photo for the photo area (default: synthetic)")
     for name in ("measure", "fit"):
         m = sub.add_parser(name); m.add_argument("scan")
-        m.add_argument("--scale", type=float, default=0.969); m.add_argument("--ox", type=float, default=27.6)
-        m.add_argument("--oy", type=float, default=37.0)
+        m.add_argument("--scale", type=float, help="override auto-registration")
+        m.add_argument("--ox", type=float); m.add_argument("--oy", type=float)
         if name == "measure":
             m.add_argument("--overlay", help="write an image showing where cells are sampled")
         else:

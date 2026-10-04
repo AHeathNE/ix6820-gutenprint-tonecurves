@@ -1,8 +1,9 @@
-# Canon PIXMA iX6820 on Linux: tone curves for Gutenprint
+# Canon PIXMA iX6820 (and imagePROGRAF TC-20M) on Linux: tone curves for CUPS
 
 Photos printing **far too dark** on a Canon PIXMA iX6820 (iX6800 series) under Linux, with shadow detail
 lost? This repo is a small CUPS filter plus measured tone curves that fix it, and a calibration tool
-so you can make curves for your own paper.
+so you can make curves for your own paper. It also works on the **driverless (IPP Everywhere) Canon
+imagePROGRAF TC-20M**, which showed the same crushed shadows (see below).
 
 ## The problem
 
@@ -33,6 +34,7 @@ One curve per CUPS queue, so each paper gets its own queue (and its own ink sett
 | `iX6820-Cardstock.json` | Hammermill Premium 110 lb cardstock | same ink settings as plain |
 | `iX6820-Sticker.json` | Koala inkjet vinyl sticker paper, glossy (white, and the clear one) | MediaType GlossyPaperStandard, Density 500, Gamma 1800, Black 600 |
 | `iX6820-Kraft.json` | Naturalabel kraft sticker paper | targets fractions of the paper's own colour |
+| `TC-20M.High.json` | imagePROGRAF TC-20M, plain copy paper, High quality | driverless queue, see below |
 
 See [docs/RESULTS.md](docs/RESULTS.md) for before/after measurements. **These curves are for the author's
 printer, ink and paper batches.** They should be a good starting point for the same papers, but
@@ -55,6 +57,21 @@ at the filter, and sets the defaults. The curve used is `curves/<queue>.json`, e
 
 Uninstall with `sudo ./uninstall.sh` and `lpadmin -x <queue>`.
 
+## Driverless printers (Canon TC-20M)
+
+Printers that take URF/PWG raster over IPP Everywhere have no Gutenprint step, so the same file is
+installed as `rastertopwg-curve` and wraps CUPS's raster-to-URF filter instead.
+
+```bash
+sudo ./install.sh
+sudo ./patch-ipp-queue.sh TC-20M High      # an existing driverless queue; sets the default quality
+```
+
+`patch-ipp-queue.sh` adds one `*cupsFilter2` line to the queue's PPD and removes the printer's JPEG
+pass-through (which would otherwise skip the curve). Curves are looked up as `<queue>.<quality>.json`
+(for example `TC-20M.High.json`), then `<queue>.json`, then `<MediaType>.json`. Quality modes behave
+very differently on this printer, so each gets its own curve; Normal has none and passes through.
+
 ## Calibrate your own paper
 
 ```bash
@@ -73,7 +90,9 @@ gives on the author's scanner. If your boxes are off, adjust `--scale/--ox/--oy`
 
 ## Caveats
 
-* Tested on one machine: Linux Mint, CUPS 2.4.7, Gutenprint 5.3.4, iX6820 over USB. Not tested elsewhere.
+* Tested on one machine: Linux Mint, CUPS 2.4.7, Gutenprint 5.3.4, iX6820 and TC-20M over USB. Not tested elsewhere.
+* Check the printer first. A TC-20M with dead colour heads printed monochrome with blown highlights, which looked
+  like a tone problem and was not. Run the printer's own nozzle check before calibrating anything.
 * Scanner response is assumed neutral. Absolute numbers are scanner values, not colorimetric.
 * Sheet-to-sheet variation on plain paper was about 5-10 levels in the midtones.
 * Queues built from PPDs depend on CUPS "printer drivers", which CUPS has said it will drop in a future

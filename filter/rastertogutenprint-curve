@@ -4,24 +4,28 @@
 #
 #   job-id user title copies options [file]
 #
-# Curves live in /usr/share/cups/tone-curves/<MediaType>.json
+# Curves live in /usr/share/cups/tone-curves/<queue>.<quality>.json, <queue>.json or <MediaType>.json
 # ({"r":[256],"g":[256],"b":[256]}). No curve for a media type -> pass-through.
 import ctypes, glob, json, os, subprocess, sys
 import numpy as np
 
 CURVE_DIR = os.environ.get("TONE_CURVE_DIR", "/usr/share/cups/tone-curves")
 def _find_child():
+    # Invoked as rastertopwg-curve -> wrap rastertopwg (driverless/IPP Everywhere queues);
+    # otherwise wrap Gutenprint's rastertogutenprint.*
+    pattern = "rastertopwg" if "pwg" in os.path.basename(sys.argv[0]) else "rastertogutenprint.*"
     here = os.path.dirname(os.path.realpath(__file__))
     for d in (here, "/usr/lib/cups/filter", "/usr/libexec/cups/filter"):
-        found = sorted(glob.glob(os.path.join(d, "rastertogutenprint.*")))
+        found = sorted(glob.glob(os.path.join(d, pattern)))
+        found = [f for f in found if not f.endswith("-curve")]
         if found:
             return found[-1]
-    return "/usr/lib/cups/filter/rastertogutenprint.5.3"
+    return "/usr/lib/cups/filter/" + pattern.replace("*", "5.3")
 
 
 CHILD = os.environ.get("TONE_CHILD") or _find_child()
-RGB_SPACES = {1, 18, 19, 20}   # RGB, SW?, sRGB, AdobeRGB (3 channel)
-GRAY_SPACES = {0}              # W
+RGB_SPACES = {1, 19, 20}       # RGB, sRGB, AdobeRGB (3 channel)
+GRAY_SPACES = {0, 18}          # W, sGray (1 channel)
 
 
 class Hdr(ctypes.Structure):  # cups_page_header2_t, 1796 bytes
@@ -62,15 +66,19 @@ def log(msg):
     sys.stderr.flush()
 
 
-def media_type(options):
+def option(options, key, default=""):
     for opt in options.split():
-        if opt.lower().startswith("mediatype="):
+        if opt.lower().startswith(key.lower() + "="):
             return opt.split("=", 1)[1]
-    return "Plain"
+    return default
+
+
+def media_type(options):
+    return option(options, "MediaType", "Plain")
 
 
 def load_curve(name):
-    if not name.replace("_", "").replace("-", "").isalnum():
+    if not name.replace("_", "").replace("-", "").replace(".", "").isalnum() or ".." in name:
         return None
     try:
         with open(os.path.join(CURVE_DIR, name + ".json")) as f:
@@ -87,8 +95,9 @@ def main():
     options = sys.argv[5]
     # per-queue curve first (CUPS sets PRINTER), then per-MediaType
     queue = os.environ.get("PRINTER", "")
+    quality = option(options, "cupsPrintQuality") or option(options, "print-quality")
     curve, used = None, None
-    for name in (queue, media_type(options)):
+    for name in (queue + "." + quality if queue and quality else "", queue, media_type(options)):
         if name and (curve := load_curve(name)) is not None:
             used = name
             break

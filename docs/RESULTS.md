@@ -44,3 +44,19 @@ Paper colour scans at about R195 G161 B118. Tones as % of that colour, G channel
 | Per-channel refit (KR2) | 80 | 59 | 49 | 34 | 19 | 9 |
 
 The R-minus-G/B spread in the midtones fell from about 12 to 5-7 points, so the dark grays moved from maroon-brown to neutral graphite with a kraft tint.
+
+## Canon imagePROGRAF TC-20M (driverless, plain copy paper, High quality)
+
+First measurement was misleading: with the cyan and magenta heads not firing, the printer fell back to
+black only and every input above ~140 printed as bare paper. After the heads were fixed (the nozzle check
+printed all colours) the real response was just too dark:
+
+| Input | 230 | 178 | 140 | 128 | 102 | 76 | 51 | 25 |
+|---|---|---|---|---|---|---|---|---|
+| Target | 230 | 179 | 140 | 128 | 102 | 77 | 51 | 26 |
+| No curve (TC5) | 237 | 178 | 128 | 103 | 52 | 15 | 3 | 1 |
+| With `TC-20M.High.json` (TC6) | 229 | 176 | 135 | 119 | 96 | 70 | 54 | 27 |
+
+The 24-step shadow strip went from 2-12 (one black bar) to 2-66, all steps distinct, and the
+blue lean in the dark grays (-3 to -9) fell to within +/-5. Normal quality showed fine horizontal
+banding that High did not; High was used as the baseline.
