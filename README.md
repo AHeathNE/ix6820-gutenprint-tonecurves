@@ -34,7 +34,8 @@ One curve per CUPS queue, so each paper gets its own queue (and its own ink sett
 | `iX6820-Cardstock.json` | Hammermill Premium 110 lb cardstock | same ink settings as plain |
 | `iX6820-Sticker.json` | Koala inkjet vinyl sticker paper, glossy (white, and the clear one) | MediaType GlossyPaperStandard, Density 500, Gamma 1800, Black 600 |
 | `iX6820-Kraft.json` | Naturalabel kraft sticker paper | targets fractions of the paper's own colour |
-| `TC-20M.High.json` | imagePROGRAF TC-20M, plain copy paper, High quality | driverless queue, see below |
+| `TC-20M.High.json` | imagePROGRAF TC-20M, plain copy paper from the cassette, High quality | driverless queue, see below |
+| `TC-20M.roll.High.json` | imagePROGRAF TC-20M, 20 lb bright copy paper on the roll, High quality | used automatically for pages wider than A3 |
 
 See [docs/RESULTS.md](docs/RESULTS.md) for before/after measurements. **These curves are for the author's
 printer, ink and paper batches.** They should be a good starting point for the same papers, but
@@ -71,6 +72,34 @@ sudo ./patch-ipp-queue.sh TC-20M High      # an existing driverless queue; sets 
 pass-through (which would otherwise skip the curve). Curves are looked up as `<queue>.<quality>.json`
 (for example `TC-20M.High.json`), then `<queue>.json`, then `<MediaType>.json`. Quality modes behave
 very differently on this printer, so each gets its own curve; Normal has none and passes through.
+
+### Printing on the TC-20M roll
+
+The TC-20M chooses its paper source from the **page size** and ignores `InputSlot` and `media-source` from
+CUPS: a Letter job came out of the cassette even with the roll selected. And CUPS renders raster images
+(a 300 dpi PNG with `scaling=100`) at an unpredictable size (about 1.44x too big here). The reliable way is a
+PDF whose page is exactly the roll width, printed with `print-scaling=none`:
+
+```bash
+python3 tools/roll_print.py poster.jpg --print            # fits the image to the 24 in roll and prints
+python3 tools/roll_print.py poster.jpg --dpi 200          # just build the PDF and show the lp command
+```
+
+Pages whose shorter side is wider than A3 can only come from the roll, so the filter then uses
+`<queue>.roll.<quality>.json` (falling back to the cassette curve). The roll paper took ink less darkly than the
+cassette paper: the cassette curve left roll shadows 15-25 levels too light, so it has its own curve.
+
+### USB printers stop answering after suspend
+
+A suspend/resume resets the USB bus and `ipp-usb` keeps stale handles, so USB IPP printers and scanners
+(Canon TC-20M, Brother MFC) stop answering until it is restarted. `contrib/ipp-usb-resume-restart` is a
+systemd-sleep hook that restarts it on resume:
+
+```bash
+sudo install -m 755 contrib/ipp-usb-resume-restart /usr/lib/systemd/system-sleep/ipp-usb-resume-restart
+```
+
+(`sudo systemctl restart ipp-usb` fixes it by hand. Connecting the printer over the network avoids it entirely.)
 
 ## Calibrate your own paper
 

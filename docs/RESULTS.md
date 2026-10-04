@@ -60,3 +60,15 @@ printed all colours) the real response was just too dark:
 The 24-step shadow strip went from 2-12 (one black bar) to 2-66, all steps distinct, and the
 blue lean in the dark grays (-3 to -9) fell to within +/-5. Normal quality showed fine horizontal
 banding that High did not; High was used as the baseline.
+
+### TC-20M roll (20 lb bright copy paper), High quality
+
+The cassette curve was applied during the first roll measurement (R4); the roll curve was fit on top of it (R5).
+
+| Input | 242 | 204 | 153 | 128 | 102 | 76 | 51 | 38 | 26 | 13 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Target | 243 | 204 | 154 | 128 | 103 | 78 | 53 | 41 | 29 | 19 |
+| Cassette curve on roll (R4) | 235 | 203 | 152 | 132 | 110 | 84 | 66 | 55 | 45 | 38 |
+| `TC-20M.roll.High.json` (R5) | 240 | 203 | 154 | 127 | 102 | 78 | 49 | 40 | 33 | 25 |
+
+The shadow strip went from 9-80 (too light and flat) to 7-69 with an even climb.

@@ -4,7 +4,8 @@
 #
 #   job-id user title copies options [file]
 #
-# Curves live in /usr/share/cups/tone-curves/<queue>.<quality>.json, <queue>.json or <MediaType>.json
+# Curves live in /usr/share/cups/tone-curves/ as <queue>[.roll].<quality>.json, <queue>[.roll].json or <MediaType>.json
+# (".roll" is used for pages wider than A3, which can only come from a roll, or when InputSlot=MainRoll)
 # ({"r":[256],"g":[256],"b":[256]}). No curve for a media type -> pass-through.
 import ctypes, glob, json, os, subprocess, sys
 import numpy as np
@@ -24,6 +25,7 @@ def _find_child():
 
 
 CHILD = os.environ.get("TONE_CHILD") or _find_child()
+ROLL_MIN_POINTS = 850             # a page narrower than this side fits the cut-sheet cassette
 RGB_SPACES = {1, 19, 20}       # RGB, sRGB, AdobeRGB (3 channel)
 GRAY_SPACES = {0, 18}          # W, sGray (1 channel)
 
@@ -93,15 +95,30 @@ def main():
         sys.stderr.write("ERROR: usage: %s job user title copies options [file]\n" % sys.argv[0])
         return 1
     options = sys.argv[5]
-    # per-queue curve first (CUPS sets PRINTER), then per-MediaType
+    # Curve lookup per page: <queue>[.roll].<quality>, <queue>[.roll], <queue>.<quality>, <queue>, <MediaType>
     queue = os.environ.get("PRINTER", "")
     quality = option(options, "cupsPrintQuality") or option(options, "print-quality")
-    curve, used = None, None
-    for name in (queue + "." + quality if queue and quality else "", queue, media_type(options)):
-        if name and (curve := load_curve(name)) is not None:
-            used = name
-            break
-    log("queue=%s MediaType=%s curve=%s" % (queue, media_type(options), used or "none (pass-through)"))
+    slot_roll = option(options, "InputSlot").lower() == "mainroll"
+    cache = {}
+
+    def pick_curve(roll):
+        key = (roll or slot_roll)
+        if key in cache:
+            return cache[key]
+        names = []
+        if queue:
+            for tag in ((".roll",) if key else ()) + ("",):
+                if quality:
+                    names.append(queue + tag + "." + quality)
+                names.append(queue + tag)
+        names.append(media_type(options))
+        for name in names:
+            c = load_curve(name)
+            if c is not None:
+                cache[key] = (c, name)
+                return cache[key]
+        cache[key] = (None, None)
+        return cache[key]
 
     cups = ctypes.CDLL("libcups.so.2")
     cups.cupsRasterOpen.restype = ctypes.c_void_p
@@ -123,13 +140,15 @@ def main():
     while cups.cupsRasterReadHeader2(rin, ctypes.byref(hdr)):
         page += 1
         n = hdr.cupsNumColors
+        roll = min(hdr.PageSize[0], hdr.PageSize[1]) > ROLL_MIN_POINTS     # wider than A3: roll only
+        curve, used = pick_curve(roll)
         apply = (curve is not None and hdr.cupsBitsPerColor == 8 and hdr.cupsBitsPerPixel == 8 * n
                  and ((hdr.cupsColorSpace in RGB_SPACES and n == 3)
                       or (hdr.cupsColorSpace in GRAY_SPACES and n == 1))
                  and hdr.cupsColorOrder == 0)
-        log("page %d: %dx%d cs=%d bpc=%d colors=%d -> %s" % (
+        log("page %d: %dx%d cs=%d bpc=%d colors=%d roll=%s -> %s" % (
             page, hdr.cupsWidth, hdr.cupsHeight, hdr.cupsColorSpace,
-            hdr.cupsBitsPerColor, n, "curve" if apply else "pass-through"))
+            hdr.cupsBitsPerColor, n, roll, ("curve " + used) if apply else "pass-through"))
         cups.cupsRasterWriteHeader2(rout, ctypes.byref(hdr))
         bpl = hdr.cupsBytesPerLine
         buf = ctypes.create_string_buffer(bpl)

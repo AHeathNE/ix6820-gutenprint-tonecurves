@@ -1,0 +1,8 @@
+#!/bin/sh
+# systemd-sleep hook: restart ipp-usb after resume.
+# A suspend/resume resets the USB bus; ipp-usb keeps stale handles afterwards and USB IPP printers and
+# scanners (e.g. Canon TC-20M, Brother MFC) stop answering until it is restarted.
+# Install:  sudo install -m 755 contrib/ipp-usb-resume-restart /usr/lib/systemd/system-sleep/ipp-usb-resume-restart
+case "$1" in
+  post) systemctl --no-block restart ipp-usb.service ;;
+esac
