@@ -89,6 +89,25 @@ Pages whose shorter side is wider than A3 can only come from the roll, so the fi
 `<queue>.roll.<quality>.json` (falling back to the cassette curve). The roll paper took ink less darkly than the
 cassette paper: the cassette curve left roll shadows 15-25 levels too light, so it has its own curve.
 
+### Multi-pass overprint ("double print") on cut sheets
+
+`tools/layers.py` prepares any number of overprint passes for one sheet from a small JSON spec: each layer has its
+own image, crop, position, ink strength (fade toward white), black mode, offset and edge feathering, plus
+registration crosses in a different colour per pass. It writes one PDF per layer and a stacked preview, and
+prints the `lp` commands (it never sends anything unless you pass `--print-layer N`).
+
+```bash
+python3 tools/layers.py --example > sheet.json     # edit the image paths and boxes
+python3 tools/layers.py sheet.json                 # sheet.layer1.pdf ... plus sheet.preview.png
+python3 tools/layers.py sheet.json --print-layer 1 # then dry, re-load the sheet the same way, --print-layer 2, ...
+```
+
+On the TC-20M, pulling the same cut sheet out and putting it back in the cassette re-registers to about 0.05 mm
+(measured with four passes), so layers land almost exactly on each other; use `offset` for deliberate
+misregistration. **This does not work on the roll:** the printer always cuts after a page (Eject cut only holds for
+5 minutes and locks the panel on a "Cut paper" prompt), and Canon documents no way to re-register paper that is
+already printed. Cut sheets go up to 11 x 17 in. `tools/double_print.py` is the simpler two-layer version.
+
 ### USB printers stop answering after suspend
 
 A suspend/resume resets the USB bus and `ipp-usb` keeps stale handles, so USB IPP printers and scanners
